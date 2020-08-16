@@ -10,17 +10,19 @@ import subprocess
 import shutil
 import os
 
-BROKER_IP_ADDRESS = "192.168.1.150"
+from utilities import Wifi
+from utilities import Logger 
+
+BROKER_IP_ADDRESS = "192.168.0.114"
 BROKER_USER_NAME = "emmathew"
 BROKER_PASSWORD = "!@#JoTo123"
-WPA_SUPPLICANT_CONF_BACKUP_PATH = "/home/pi/MHomeAutomation/wpa_supplicant_backup.conf"
-WPA_SUPPLICANT_CONF_ACTUAL_PATH = "/etc/wpa_supplicant/wpa_supplicant.conf"
+
 
 statusInfo = {'connectedToServer':False}
 statusInfoMutex = Lock()
 mqttClient = mqtt.Client("P1")
 
-MHA_ACCESS_POINT_PREFIX = "MHA-ESP-Config-AP"
+
 
 println = builtins.print
 def print(*args, **kwargs):
@@ -89,61 +91,23 @@ def getApInfo(apList):
 					dataList.append(data)
 	return dataList
 
-def connectToWifi(ssid, macaddr):
-	shutil.copy(WPA_SUPPLICANT_CONF_BACKUP_PATH, WPA_SUPPLICANT_CONF_ACTUAL_PATH)
-	newStrToAddToFile = '\nnetwork={\n\tssid="'+ssid+'"\n\tkey_mgmt=NONE\n\tscan_ssid=1\n}'
-	
-	if os.path.exists(WPA_SUPPLICANT_CONF_ACTUAL_PATH) == False:
-		println("Error Connecting to Wifi. File Not present")
-		errorCode = 1
-		return errorCode
 
-	f = open(WPA_SUPPLICANT_CONF_ACTUAL_PATH,"a+")
-	f.write(newStrToAddToFile)
-	f.close()
-
-	shcmd = 'wpa_cli -i wlan0 reconfigure'
-	response = subprocess.run(shcmd.split(' '), capture_output=True, timeout=30)
-	if response.returncode != 0:
-		println("Error reconfiguring wireless interface")
-		errorCode = 2
-		return errorCode
-
-	# Check if Wifi connected
-	shcmd = 'ifconfig wlan0'
-	response = subprocess.run(shcmd.split(' '), capture_output=True, timeout=30)
-	if response.returncode != 0:
-		println("Error validating wifi connection.")
-		errorCode = 2
-		return errorCode
-	output = response.stdout.decode("utf-8").split('\n')
-	ipaddr='192.168.4.1'
-	for line in output:
-		if 'inet ' in line:
-			# Connected
-			println("Wifi Connected")
-			return 0
-	println("Could not verify wifi connection")
-	errorCode = 3
-	return errorCode
 
 def handleRequest(command, args):
 	respMsg = {'type':'response', 'command':command, 'data':None}
 
 	if command == 'scanWifi':
 		println("Command recevied to scan wifi")
-		shcmd = 'sudo iwlist wlan0 scan'
-		response = subprocess.run(shcmd.split(' '), capture_output=True, timeout=30)
-		if response.returncode == 0:
-			apNames = []
-			output = response.stdout.decode("utf-8").split('\n')
-			for line in output:
-				if 'ESSID' in line and MHA_ACCESS_POINT_PREFIX in line:
-					apNames.append(line.split(':')[-1][1:-1])
-			apInfo = getApInfo(apNames) # get a list of dict with mac addr and ap names
-			respMsg['data'] = apInfo
-			println("New APs:" + str(apInfo))
-			publishMessage(json.dumps(respMsg))
+		apInfo = Wifi.findMhaDevices()
+		if len(apInfo) < 1:
+			Logger.log(Logger.LogLevel.error, "Unable to find any MHA Devices in accespoint mode")
+		else:
+			data = []
+			for ap in apInfo:
+				data.append({'macaddr': Wifi.getMacAddr(ap), 'ssid':Wifi.getSsid(ap)})
+			respMsg['data'] = data
+			Logger.log(Logger.LogLevel.info, "New APs:" + str(data))
+		publishMessage(json.dumps(respMsg))
 
 	if command == 'connectToWifi':
 		println('Command Received to connec to Wifi')
